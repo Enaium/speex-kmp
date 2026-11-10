@@ -1,3 +1,4 @@
+# Managed in the repository; see README for publishing requirements.
 name: Test
 
 # Manual only: the workflow is never started by a push or pull request.
