@@ -95,6 +95,12 @@ kotlin {
         }
         testRuns["test"].executionTask.configure {
             useJUnitPlatform()
+            // Print each test before it runs: a JNI crash kills the worker
+            // without producing a test result, so the last STARTED line is the
+            // only pointer to the failing test.
+            testLogging {
+                events("started", "failed")
+            }
         }
     }
 
