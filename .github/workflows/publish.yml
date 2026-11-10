@@ -1,0 +1,225 @@
+name: Publish
+
+"on":
+  workflow_dispatch:
+
+# Maven Central coordinates are immutable, so each JNI artifact and each native
+# target klib is published from exactly one runner:
+#
+#   macos-15       -> :speex-kmp (jvm, macos/ios/tvos/watchos, js, wasmJs)
+#                     :jni-jvm-darwin-aarch64, :jni-jvm-darwin-x86_64
+#   ubuntu-latest  -> :speex-kmp (android AAR, linuxX64/linuxArm64/mingwX64)
+#                     :jni-jvm-linux-x86_64, :jni-jvm-linux-aarch64
+#   windows-latest -> :jni-jvm-windows-x86_64 (via MinGW)
+#
+# Required repository secrets:
+#   MAVEN_CENTRAL_USERNAME   Sonatype Central Portal user-token username
+#   MAVEN_CENTRAL_PASSWORD   Sonatype Central Portal user-token password
+#   SIGNING_KEY              base64-encoded PGP secret key ring (.gpg, binary)
+#   SIGNING_KEY_ID           8-hex-digit key id (without the 0x prefix)
+#   SIGNING_PASSWORD         Passphrase of the signing key
+#   NPM_PUBLISH_KEY          npm token, written to ~/.gradle/gradle.properties
+#                            as npm.publish.key before the npm publish step
+
+jobs:
+  publish-macos:
+    name: Publish macOS (JVM + Apple + web + darwin JNI)
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Check out the Speex submodule
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init --recursive
+
+      - name: Configure JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Setup Emscripten
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          "$HOME/emsdk/emsdk" install latest
+          "$HOME/emsdk/emsdk" activate latest
+          echo "EMSDK=$HOME/emsdk" >> "$GITHUB_ENV"
+
+      - name: Decode signing key
+        run: |
+          echo "${{ secrets.SIGNING_KEY }}" | tr -d ' \n' | base64 -d > "$RUNNER_TEMP/signing-key.gpg"
+
+      - name: Publish macOS, Apple, web and JVM artifacts
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          -Psigning.keyId="${{ secrets.SIGNING_KEY_ID }}"
+          -Psigning.secretKeyRingFile="${{ runner.temp }}/signing-key.gpg"
+          -Psigning.password="${{ secrets.SIGNING_PASSWORD }}"
+          -PmavenCentralUsername="${{ secrets.MAVEN_CENTRAL_USERNAME }}"
+          -PmavenCentralPassword="${{ secrets.MAVEN_CENTRAL_PASSWORD }}"
+          :speex-kmp:publishToMavenCentral
+          -x :speex-kmp:publishAndroidPublicationToMavenCentral
+          -x :speex-kmp:publishLinuxX64PublicationToMavenCentral
+          -x :speex-kmp:publishLinuxArm64PublicationToMavenCentral
+          -x :speex-kmp:publishMingwX64PublicationToMavenCentral
+          -x :speex-kmp:publishAndroidNativeArm64PublicationToMavenCentral
+          -x :speex-kmp:publishAndroidNativeArm32PublicationToMavenCentral
+          -x :speex-kmp:publishAndroidNativeX64PublicationToMavenCentral
+          -x :speex-kmp:publishAndroidNativeX86PublicationToMavenCentral
+          :jni-jvm-darwin-aarch64:publishToMavenCentral
+          :jni-jvm-darwin-x86_64:publishToMavenCentral
+
+  publish-linux:
+    name: Publish Linux (Android + Linux + MinGW + Linux JNI)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Check out the Speex submodule
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init --recursive
+
+      - name: Configure JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install cross-compilers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-mingw-w64-x86-64
+
+      - name: Install Android SDK components
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-37.0" "platforms;android-37.1" "ndk;27.0.12077973" >/dev/null
+
+      - name: Decode signing key
+        run: |
+          echo "${{ secrets.SIGNING_KEY }}" | tr -d ' \n' | base64 -d > "$RUNNER_TEMP/signing-key.gpg"
+
+      - name: Publish Android, Linux, MinGW and Linux JNI artifacts
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          -Psigning.keyId="${{ secrets.SIGNING_KEY_ID }}"
+          -Psigning.secretKeyRingFile="${{ runner.temp }}/signing-key.gpg"
+          -Psigning.password="${{ secrets.SIGNING_PASSWORD }}"
+          -PmavenCentralUsername="${{ secrets.MAVEN_CENTRAL_USERNAME }}"
+          -PmavenCentralPassword="${{ secrets.MAVEN_CENTRAL_PASSWORD }}"
+          :speex-kmp:publishAndroidPublicationToMavenCentral
+          :speex-kmp:publishLinuxX64PublicationToMavenCentral
+          :speex-kmp:publishLinuxArm64PublicationToMavenCentral
+          :speex-kmp:publishMingwX64PublicationToMavenCentral
+          :speex-kmp:publishAndroidNativeArm64PublicationToMavenCentral
+          :speex-kmp:publishAndroidNativeArm32PublicationToMavenCentral
+          :speex-kmp:publishAndroidNativeX64PublicationToMavenCentral
+          :speex-kmp:publishAndroidNativeX86PublicationToMavenCentral
+          :jni-jvm-linux-x86_64:publishToMavenCentral
+          :jni-jvm-linux-aarch64:publishToMavenCentral
+
+  publish-windows:
+    name: Publish Windows JNI
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Check out the Speex submodule
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init --recursive
+
+      - name: Configure JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install MinGW
+        shell: pwsh
+        run: |
+          choco install mingw -y --no-progress
+          echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\bin" |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Decode signing key
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes(
+            "$env:RUNNER_TEMP\signing-key.gpg",
+            [Convert]::FromBase64String("${{ secrets.SIGNING_KEY }}")
+          )
+
+      - name: Publish the Windows JNI artifact
+        shell: cmd
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          -Psigning.keyId="${{ secrets.SIGNING_KEY_ID }}"
+          -Psigning.secretKeyRingFile="${{ runner.temp }}\signing-key.gpg"
+          -Psigning.password="${{ secrets.SIGNING_PASSWORD }}"
+          -PmavenCentralUsername="${{ secrets.MAVEN_CENTRAL_USERNAME }}"
+          -PmavenCentralPassword="${{ secrets.MAVEN_CENTRAL_PASSWORD }}"
+          :jni-jvm-windows-x86_64:publishToMavenCentral
+
+  # Runs only after every Maven Central job succeeded. Keeping npm in a
+  # separate job makes the release order explicit: the wasmJs klib and all
+  # other Maven coordinates are published first, then @enaium/speex-kmp.
+  publish-npm:
+    name: Publish @enaium/speex-kmp npm package
+    needs: [publish-macos, publish-linux, publish-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Check out the Speex submodules
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init --recursive
+
+      - name: Configure JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install Emscripten SDK
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          "$HOME/emsdk/emsdk" install latest
+          "$HOME/emsdk/emsdk" activate latest
+          echo "EMSDK=$HOME/emsdk" >> "$GITHUB_ENV"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Publish the @enaium/speex-kmp npm package
+        run: |
+          install -d "$HOME/.gradle"
+          printf 'npm.publish.key=%s\n' "$NPM_PUBLISH_KEY" >> "$HOME/.gradle/gradle.properties"
+          ./gradlew --no-daemon --stacktrace :speex-kmp:publishWasmNpm
+        env:
+          NPM_PUBLISH_KEY: ${{ secrets.NPM_PUBLISH_KEY }}

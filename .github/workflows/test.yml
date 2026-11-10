@@ -1,0 +1,280 @@
+name: Test
+
+# Manual only: the workflow is never started by a push or pull request.
+"on":
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-macos:
+    name: Test macOS (JVM + Apple + web)
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Check out the Speex submodule
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init --recursive
+
+      - name: Configure JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Setup Emscripten
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          "$HOME/emsdk/emsdk" install latest
+          "$HOME/emsdk/emsdk" activate latest
+          echo "EMSDK=$HOME/emsdk" >> "$GITHUB_ENV"
+
+      - name: Decode signing key
+        run: |
+          echo "${{ secrets.SIGNING_KEY }}" | tr -d ' \n' | base64 -d > "$RUNNER_TEMP/signing-key.gpg"
+          ls -la "$RUNNER_TEMP/signing-key.gpg"
+
+      - name: Publish macOS, Apple, web and JVM artifacts to Maven Local
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          -Psigning.keyId="${{ secrets.SIGNING_KEY_ID }}"
+          -Psigning.secretKeyRingFile="${{ runner.temp }}/signing-key.gpg"
+          -Psigning.password="${{ secrets.SIGNING_PASSWORD }}"
+          :speex-kmp:publishToMavenLocal
+          -x :speex-kmp:publishAndroidPublicationToMavenLocal
+          -x :speex-kmp:publishLinuxX64PublicationToMavenLocal
+          -x :speex-kmp:publishLinuxArm64PublicationToMavenLocal
+          -x :speex-kmp:publishMingwX64PublicationToMavenLocal
+          -x :speex-kmp:publishAndroidNativeArm64PublicationToMavenLocal
+          -x :speex-kmp:publishAndroidNativeArm32PublicationToMavenLocal
+          -x :speex-kmp:publishAndroidNativeX64PublicationToMavenLocal
+          -x :speex-kmp:publishAndroidNativeX86PublicationToMavenLocal
+          :jni-jvm-darwin-aarch64:publishToMavenLocal
+          :jni-jvm-darwin-x86_64:publishToMavenLocal
+
+      - name: Run JVM, native and web tests
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          :speex-kmp:jvmTest
+          :speex-kmp:macosArm64Test
+          :speex-kmp:jsNodeTest
+          :speex-kmp:wasmJsNodeTest
+
+      - name: Compile the remaining Apple targets and link a simulator test
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          :speex-kmp:compileKotlinMacosX64
+          :speex-kmp:compileKotlinIosArm64
+          :speex-kmp:compileKotlinIosX64
+          :speex-kmp:compileKotlinIosSimulatorArm64
+          :speex-kmp:compileKotlinTvosArm64
+          :speex-kmp:compileKotlinTvosSimulatorArm64
+          :speex-kmp:compileKotlinWatchosArm64
+          :speex-kmp:compileKotlinWatchosSimulatorArm64
+          :speex-kmp:compileKotlinWatchosDeviceArm64
+          :speex-kmp:linkDebugTestIosSimulatorArm64
+          :speex-kmp:linkDebugTestWatchosSimulatorArm64
+
+      - name: Build and run the visual example headless
+        run: |
+          ./gradlew --no-daemon --stacktrace :examples:visual:linkDebugExecutableMacosArm64
+          for page in 0 1 2 3 4 5 6; do
+            SDL_VIDEO_DRIVER=dummy SPEEX_KMP_FRAMES=20 SPEEX_KMP_PAGE=$page \
+              ./examples/visual/build/bin/macosArm64/debugExecutable/visual.kexe
+          done
+
+      - name: Stage the @enaium/speex-kmp npm package
+        run: |
+          ./gradlew --no-daemon --stacktrace :speex-kmp:assembleWasmNpm
+          cd speex-kmp/build/npm
+          node --input-type=module -e "
+            import { readFile } from 'node:fs/promises';
+            import { initSpeexKmp } from './speex_kmp_glue.js';
+            const bytes = await readFile('./speex_wasm.wasm');
+            const speex = await initSpeexKmp(bytes);
+            console.log('npm package version:', speex.versionString());
+          "
+          npm pack --dry-run
+
+  test-linux:
+    name: Test Linux (JVM + Linux + cross + Android)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Check out the Speex submodule
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init --recursive
+
+      - name: Configure JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install cross-compilers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-mingw-w64-x86-64
+
+      - name: Install Android SDK components
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-37.0" "platforms;android-37.1" "ndk;27.0.12077973" >/dev/null
+
+      - name: Decode signing key
+        run: |
+          echo "${{ secrets.SIGNING_KEY }}" | tr -d ' \n' | base64 -d > "$RUNNER_TEMP/signing-key.gpg"
+          ls -la "$RUNNER_TEMP/signing-key.gpg"
+
+      - name: Publish Linux, Android, MinGW and JNI artifacts to Maven Local
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          -Psigning.keyId="${{ secrets.SIGNING_KEY_ID }}"
+          -Psigning.secretKeyRingFile="${{ runner.temp }}/signing-key.gpg"
+          -Psigning.password="${{ secrets.SIGNING_PASSWORD }}"
+          :speex-kmp:publishKotlinMultiplatformPublicationToMavenLocal
+          :speex-kmp:publishLinuxX64PublicationToMavenLocal
+          :speex-kmp:publishLinuxArm64PublicationToMavenLocal
+          :speex-kmp:publishMingwX64PublicationToMavenLocal
+          :speex-kmp:publishAndroidPublicationToMavenLocal
+          :speex-kmp:publishAndroidNativeArm64PublicationToMavenLocal
+          :speex-kmp:publishAndroidNativeArm32PublicationToMavenLocal
+          :speex-kmp:publishAndroidNativeX64PublicationToMavenLocal
+          :speex-kmp:publishAndroidNativeX86PublicationToMavenLocal
+          :jni-jvm-linux-x86_64:publishToMavenLocal
+          :jni-jvm-linux-aarch64:publishToMavenLocal
+
+      - name: Run JVM, Linux, Android host and cross-target tests
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          :speex-kmp:jvmTest
+          :speex-kmp:linuxX64Test
+          :speex-kmp:testAndroidHostTest
+          :speex-kmp:linkDebugTestMingwX64
+          :speex-kmp:linkDebugTestLinuxArm64
+          :speex-kmp:compileKotlinLinuxArm64
+          --continue
+
+      - name: Build the Android JNI library, AAR and static archives
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          :speex-kmp:bundleAndroidMainAar
+          :speex-kmp:buildAndroidJniLibs
+          :speex-kmp:buildNative_linuxX64
+          :speex-kmp:buildNative_linuxArm64
+          :speex-kmp:buildNative_mingwX64
+
+      - name: Verify the AAR ships every ABI
+        run: |
+          AAR="speex-kmp/build/outputs/aar/speex-kmp.aar"
+          test -f "$AAR" || { echo "FAIL: AAR missing"; exit 1; }
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            unzip -l "$AAR" | grep -q "jni/$abi/libspeex_jni.so" || {
+              echo "FAIL: AAR lacks $abi libspeex_jni.so"
+              exit 1
+            }
+          done
+          echo "OK: AAR ships libspeex_jni.so for every ABI"
+
+      - name: Verify the JNI library per ABI
+        run: |
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            lib="speex-kmp/build/jniLibs/$abi/libspeex_jni.so"
+            test -f "$lib" || { echo "FAIL: no JNI library for $abi"; exit 1; }
+            echo "OK: $abi $(du -h "$lib" | cut -f1)"
+          done
+
+      - name: Verify the static archives
+        run: |
+          for target in linuxX64 linuxArm64 mingwX64; do
+            archive="speex-kmp/build/native/$target/libspeex_kmp.a"
+            test -f "$archive" || { echo "FAIL: no static archive for $target"; exit 1; }
+            echo "OK: $target $(du -h "$archive" | cut -f1)"
+          done
+
+      - name: Compile the visual example for Linux and MinGW
+        # The executables are linked on a matching host; the JVM headless run
+        # and the macOS native run exercise the drawing paths.
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          :examples:visual:compileKotlinLinuxX64
+          :examples:visual:compileKotlinMingwX64
+
+  test-windows:
+    name: Test Windows (JVM + MinGW)
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Check out the Speex submodule
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init --recursive
+
+      - name: Configure JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install MinGW
+        shell: pwsh
+        run: |
+          choco install mingw -y --no-progress
+          echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\bin" |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Decode signing key
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes(
+            "$env:RUNNER_TEMP\signing-key.gpg",
+            [Convert]::FromBase64String("${{ secrets.SIGNING_KEY }}")
+          )
+
+      - name: Publish the Windows JNI artifact to Maven Local
+        shell: cmd
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          -Psigning.keyId="${{ secrets.SIGNING_KEY_ID }}"
+          -Psigning.secretKeyRingFile="${{ runner.temp }}\signing-key.gpg"
+          -Psigning.password="${{ secrets.SIGNING_PASSWORD }}"
+          :jni-jvm-windows-x86_64:publishToMavenLocal
+
+      - name: Run JVM and MinGW tests
+        run: ./gradlew --no-daemon --stacktrace :speex-kmp:jvmTest :speex-kmp:mingwX64Test
+
+      - name: Link the visual example
+        run: ./gradlew --no-daemon --stacktrace :examples:visual:linkDebugExecutableMingwX64
+
+      - name: Verify the Windows JNI library
+        shell: pwsh
+        run: |
+          $dll = "jni/jvm/windows-x86_64/build/jni-native/windows-x86_64/speex_jni.dll"
+          if (!(Test-Path $dll)) { throw "Missing $dll" }
+          Write-Output "OK: $((Get-Item $dll).Length) bytes"
