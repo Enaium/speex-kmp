@@ -1,0 +1,54 @@
+name: Debug Windows JVM tests
+
+"on":
+  workflow_dispatch:
+
+jobs:
+  debug-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+      - name: Check out the Speex submodules
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init --recursive
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Install MinGW
+        shell: pwsh
+        run: |
+          choco install mingw -y --no-progress
+          echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\bin" |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Run each JVM test separately
+        shell: pwsh
+        run: |
+          $tests = @(
+            "cn.enaium.speex.SpeexDspTest.resamplerFractionalRateAndControls",
+            "cn.enaium.speex.SpeexDspTest.ringBufferRoundTrip",
+            "cn.enaium.speex.SpeexDspTest.preprocessorRunsAndExposesSpectra",
+            "cn.enaium.speex.SpeexDspTest.versionAndResampler",
+            "cn.enaium.speex.SpeexDspTest.jitterBufferRoundTrip",
+            "cn.enaium.speex.SpeexDspTest.echoCancellerAndDecorrelator",
+            "cn.enaium.speex.SpeexTest.encoderControls",
+            "cn.enaium.speex.SpeexTest.packetLossConcealment",
+            "cn.enaium.speex.SpeexTest.encodeDecodeEachMode",
+            "cn.enaium.speex.SpeexTest.versionAndModes",
+            "cn.enaium.speex.SpeexTest.lowLevelStereoHelpers",
+            "cn.enaium.speex.SpeexTest.headerRoundTrip",
+            "cn.enaium.speex.SpeexTest.bitsRoundTrip",
+            "cn.enaium.speex.SpeexTest.encodeStereoFoldsInputInPlace",
+            "cn.enaium.speex.SpeexTest.decoderControls",
+            "cn.enaium.speex.SpeexTest.inputOffsetIsHonoured",
+            "cn.enaium.speex.SpeexTest.stereoRoundTrip"
+          )
+          foreach ($test in $tests) {
+            Write-Host "=== $test ==="
+            ./gradlew --no-daemon --stacktrace :speex-kmp:jvmTest --tests $test
+            Write-Host "EXIT $test = $LASTEXITCODE"
+          }
