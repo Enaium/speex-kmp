@@ -200,8 +200,11 @@ class SpeexDspTest {
             assertEquals(3, buffer.writeZeros(3))
             assertContentEquals(ByteArray(3), buffer.read(3))
 
+            // Shrinking used to leave the ring pointers outside the new
+            // allocation; writing then corrupted the native heap.
             assertEquals(4, buffer.resize(4))
             assertEquals(2, buffer.write(byteArrayOf(9, 10)))
+            assertContentEquals(byteArrayOf(9, 10), buffer.read(2))
         }
     }
 

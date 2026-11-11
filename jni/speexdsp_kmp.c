@@ -895,5 +895,35 @@ int xdsp_buffer_available(xdsp_buffer *buffer) {
 
 int xdsp_buffer_resize(xdsp_buffer *buffer, int len) {
   if (!buffer || !buffer->state || len <= 0) return XDSP_INVALID;
-  return speex_buffer_resize(buffer->state, len);
+  /*
+   * Do not call speex_buffer_resize(): upstream's implementation only
+   * reallocs the backing store and leaves read_ptr/write_ptr outside the new
+   * range. A shrink followed by a write then writes past the allocation (the
+   * Windows JVM heap detects this as 0xC0000374). Rebuild the ring instead and
+   * keep the newest bytes that still fit.
+   */
+  SpeexBuffer *old = buffer->state;
+  int available = speex_buffer_get_available(old);
+  uint8_t *saved = NULL;
+  if (available > 0) {
+    saved = (uint8_t *)malloc((size_t)available);
+    if (!saved) return XDSP_INVALID;
+    speex_buffer_read(old, saved, available);
+  }
+
+  SpeexBuffer *next = speex_buffer_init(len);
+  if (!next) {
+    free(saved);
+    return XDSP_INVALID;
+  }
+  if (available > 0) {
+    int keep = available < len ? available : len;
+    speex_buffer_write(next, saved + (available - keep), keep);
+  }
+  free(saved);
+
+  speex_buffer_destroy(old);
+  buffer->state = next;
+  buffer->out_size = 0;
+  return len;
 }

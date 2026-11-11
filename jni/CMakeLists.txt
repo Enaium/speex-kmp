@@ -117,16 +117,7 @@ target_include_directories(speex-static
 )
 target_compile_definitions(speex-static PRIVATE HAVE_CONFIG_H=1)
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-  # Speex's C code predates modern strict-aliasing rules. GCC 15 (the MinGW
-  # toolchain on the Windows runner) was observed to miscompile the
-  # preprocessor into a heap-corrupting write; keep the old C contract.
-  target_compile_options(speex-static PRIVATE
-    -Wno-unused-function
-    -fno-strict-aliasing
-  )
-  if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(speex-static PRIVATE -fno-aggressive-loop-optimizations)
-  endif()
+  target_compile_options(speex-static PRIVATE -Wno-unused-function)
 endif()
 
 # The archive name is what the cinterop `-staticLibrary` flag and the JNI link
