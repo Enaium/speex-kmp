@@ -288,6 +288,21 @@ The entry points print a final summary per page (frames processed, packet
 count/bitrate, resampler in/out counts, VAD/AGC state, ERLE, jitter statuses and
 ring-buffer throughput), which is what the headless runs report.
 
+### Android example
+
+[`examples/android`](examples/android) is a plain Views app that consumes the
+published AAR (no native sources of its own). It runs a deterministic
+wideband encode/decode self-test on launch and can record three seconds from
+the microphone, encode/decode it, and play the result back.
+
+```bash
+./gradlew :examples:android:assembleDebug
+# examples/android/build/outputs/apk/debug/android-debug.apk
+```
+
+The APK packages `libspeex_jni.so` for `arm64-v8a`, `armeabi-v7a`, `x86` and
+`x86_64`; `RECORD_AUDIO` is requested at runtime for the recording button.
+
 ## Building
 
 Requirements:

@@ -182,6 +182,7 @@ jobs:
           :speex-kmp:buildNative_linuxX64
           :speex-kmp:buildNative_linuxArm64
           :speex-kmp:buildNative_mingwX64
+          :examples:android:assembleDebug
 
       - name: Verify the AAR ships every ABI
         run: |
@@ -202,6 +203,17 @@ jobs:
             test -f "$lib" || { echo "FAIL: no JNI library for $abi"; exit 1; }
             echo "OK: $abi $(du -h "$lib" | cut -f1)"
           done
+
+      - name: Verify the Android example APK
+        run: |
+          APK="examples/android/build/outputs/apk/debug/android-debug.apk"
+          test -f "$APK" || { echo "FAIL: Android example APK missing"; exit 1; }
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            unzip -l "$APK" | grep -q "lib/$abi/libspeex_jni.so" || {
+              echo "FAIL: APK lacks lib/$abi/libspeex_jni.so"; exit 1;
+            }
+          done
+          echo "OK: Android example APK packages libspeex_jni.so for every ABI"
 
       - name: Verify the static archives
         run: |
